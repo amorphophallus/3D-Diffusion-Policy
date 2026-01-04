@@ -1,0 +1,26 @@
+name: FB_one_leg_low
+
+task_name: one_leg
+
+shape_meta: &shape_meta
+  obs:
+    point_cloud:
+      shape: [1024, 3]
+      type: point_cloud
+    agent_pos:
+      shape: [37]
+      type: low_dim
+  action:
+    shape: [8]
+
+env_runner: null
+
+dataset:
+  _target_: diffusion_policy_3d.dataset.simple_dp3_dataset.SimpleDP3Dataset
+  zarr_path: data/FB_one_leg_low.zarr
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  seed: 42
+  val_ratio: 0.1
+  max_train_episodes: null
