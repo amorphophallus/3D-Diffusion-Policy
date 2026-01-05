@@ -77,7 +77,29 @@ def field_exists(obs_block: Any, path: Sequence[str]) -> bool:
 
 def stack_field(obs_block: Any, path: Sequence[str], length: int) -> np.ndarray:
     if isinstance(obs_block, (list, tuple)):
-        arr = np.stack([np.asarray(resolve_path(step, path)) for step in obs_block], axis=0)
+        arrays = []
+        for step in obs_block:
+            arr = np.asarray(resolve_path(step, path))
+            arrays.append(arr)
+        
+        # Check if this is point_cloud field and handle shape inconsistencies
+        if len(path) == 1 and path[0] == "point_cloud":
+            # Find the maximum number of points to pad to
+            max_points = max(arr.shape[0] for arr in arrays)
+            padded_arrays = []
+            
+            for arr in arrays:
+                if arr.shape[0] < max_points:
+                    # Pad with zeros to match max_points
+                    pad_shape = (max_points - arr.shape[0],) + arr.shape[1:]
+                    padding = np.zeros(pad_shape, dtype=arr.dtype)
+                    arr_padded = np.concatenate([arr, padding], axis=0)
+                    padded_arrays.append(arr_padded)
+                else:
+                    padded_arrays.append(arr)
+            arrays = padded_arrays
+        
+        arr = np.stack(arrays, axis=0)
     elif isinstance(obs_block, dict):
         arr = np.asarray(resolve_path(obs_block, path))
     else:
@@ -129,12 +151,13 @@ def load_episode(pkl_path: Path) -> Tuple[dict, dict]:
         rewards = pad_to_obs_length(raw["rewards"], obs_len, "rewards")
         rewards = rewards.astype(np.float32)
 
-    color_image1 = None
-    color_image2 = None
-    if field_exists(obs_block, ("color_image1",)):
-        color_image1 = stack_field(obs_block, ("color_image1",), obs_len)
-    if field_exists(obs_block, ("color_image2",)):
-        color_image2 = stack_field(obs_block, ("color_image2",), obs_len)
+    # Skip color images to save space and processing time
+    # color_image1 = None
+    # color_image2 = None
+    # if field_exists(obs_block, ("color_image1",)):
+    #     color_image1 = stack_field(obs_block, ("color_image1",), obs_len)
+    # if field_exists(obs_block, ("color_image2",)):
+    #     color_image2 = stack_field(obs_block, ("color_image2",), obs_len)
 
     episode = {
         "state": state,
@@ -143,10 +166,11 @@ def load_episode(pkl_path: Path) -> Tuple[dict, dict]:
     }
     if rewards is not None:
         episode["reward"] = rewards
-    if color_image1 is not None:
-        episode["color_image1"] = color_image1
-    if color_image2 is not None:
-        episode["color_image2"] = color_image2
+    # Skip color images
+    # if color_image1 is not None:
+    #     episode["color_image1"] = color_image1
+    # if color_image2 is not None:
+    #     episode["color_image2"] = color_image2
 
     meta = {
         "success": raw.get("success"),
@@ -175,6 +199,11 @@ def main(args: argparse.Namespace) -> None:
     pickle_paths = collect_pickles(source_dir)
     if not pickle_paths:
         raise FileNotFoundError(f"No pickle files found under {source_dir}")
+
+    # Limit number of rollouts if specified
+    if args.max_rollouts > 0:
+        pickle_paths = pickle_paths[:args.max_rollouts]
+        print(f"Processing first {len(pickle_paths)} rollouts (limited by max_rollouts={args.max_rollouts})")
 
     store = zarr.DirectoryStore(str(output_path))
     buffer = ReplayBuffer.create_empty_zarr(storage=store)
@@ -218,6 +247,7 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build a DP3 zarr dataset from pickles")
     parser.add_argument("--source-dir", type=str, required=True, help="Directory containing episode pickles")
     parser.add_argument("--output", type=str, required=True, help="Output zarr directory")
+    parser.add_argument("--max-rollouts", type=int, default=50, help="Maximum number of rollouts to process (default: 50, 0 for unlimited)")
     return parser.parse_args(list(argv))
 
 
