@@ -17,10 +17,10 @@ env_runner: null
 
 dataset:
   _target_: diffusion_policy_3d.dataset.simple_dp3_dataset.SimpleDP3Dataset
-  zarr_path: data/FB_one_leg_low.zarr
+  zarr_path: data/one_leg/low/success.zarr
   horizon: ${horizon}
   pad_before: ${eval:'${n_obs_steps}-1'}
   pad_after: ${eval:'${n_action_steps}-1'}
   seed: 42
   val_ratio: 0.1
-  max_train_episodes: null
+  max_train_episodes: 90
