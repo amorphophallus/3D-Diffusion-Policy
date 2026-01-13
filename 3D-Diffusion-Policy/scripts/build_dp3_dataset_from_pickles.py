@@ -19,6 +19,7 @@ import pickle
 import sys
 from pathlib import Path
 from typing import Any, Iterable, List, Sequence, Tuple
+from datetime import datetime
 
 import numpy as np
 import zarr
@@ -183,27 +184,68 @@ def load_episode(pkl_path: Path) -> Tuple[dict, dict]:
     return episode, meta
 
 
-def collect_pickles(source_dir: Path) -> List[Path]:
+def collect_pickles(source_dir: Path, data_date_since: str = None) -> List[Path]:
     exts = {".pkl", ".pickle"}
-    paths: List[Path] = []
+    paths_with_dates: List[Tuple[Path, datetime]] = []
+    
+    # Parse cut-off date if provided
+    since_date = None
+    if data_date_since:
+        try:
+            since_date = datetime.fromisoformat(data_date_since)
+        except ValueError:
+            # Fallback for simple date format if fromisoformat is too strict in some python versions
+            # or if input is slightly off standard.
+            # But fromisoformat usually handles "YYYY-MM-DD" correctly.
+            # Let's try appending time if it looks like a date only
+            if len(data_date_since) == 10: # YYYY-MM-DD
+                 try:
+                     since_date = datetime.fromisoformat(data_date_since + "T00:00:00")
+                 except ValueError:
+                     pass
+            
+            if since_date is None:
+                print(f"Warning: Could not parse data_date_since '{data_date_since}', ignoring filter.")
+
     for path in source_dir.rglob("*"):
         if path.suffix.lower() in exts:
-            paths.append(path)
-    return sorted(paths)
+            # Try to extract date from filename
+            # Filename format: 2026-01-10T23:51:56.685824.pkl
+            try:
+                dt = datetime.fromisoformat(path.stem)
+                paths_with_dates.append((path, dt))
+            except ValueError:
+                # If filename is not a timestamp, we might still want to include it if no filter is set
+                # But if we want to sort by date, better to use mtime as fallback or put at end?
+                # For now, let's use file mtime as fallback for sorting
+                mtime = datetime.fromtimestamp(path.stat().st_mtime)
+                paths_with_dates.append((path, mtime))
+
+    # Filter by date if requested
+    if since_date:
+        paths_with_dates = [
+            (p, d) for p, d in paths_with_dates 
+            if d >= since_date
+        ]
+
+    # Sort by date descending (newest first)
+    paths_with_dates.sort(key=lambda x: x[1], reverse=True)
+    
+    return [p for p, d in paths_with_dates]
 
 
 def main(args: argparse.Namespace) -> None:
     source_dir = Path(args.source_dir).expanduser().resolve()
     output_path = Path(args.output).expanduser().resolve()
 
-    pickle_paths = collect_pickles(source_dir)
+    pickle_paths = collect_pickles(source_dir, args.data_date_since)
     if not pickle_paths:
         raise FileNotFoundError(f"No pickle files found under {source_dir}")
 
     # Limit number of rollouts if specified
     if args.max_rollouts > 0:
         pickle_paths = pickle_paths[:args.max_rollouts]
-        print(f"Processing first {len(pickle_paths)} rollouts (limited by max_rollouts={args.max_rollouts})")
+        print(f"Processing first {len(pickle_paths)} rollouts (sorted newest first, limited by max_rollouts={args.max_rollouts})")
 
     store = zarr.DirectoryStore(str(output_path))
     buffer = ReplayBuffer.create_empty_zarr(storage=store)
@@ -248,6 +290,7 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument("--source-dir", type=str, required=True, help="Directory containing episode pickles")
     parser.add_argument("--output", type=str, required=True, help="Output zarr directory")
     parser.add_argument("--max-rollouts", type=int, default=50, help="Maximum number of rollouts to process (default: 50, 0 for unlimited)")
+    parser.add_argument("--data-date-since", type=str, default=None, help="Filter files modified/created since this date (ISO format), e.g. 2026-01-10T12:00:00")
     return parser.parse_args(list(argv))
 
 
